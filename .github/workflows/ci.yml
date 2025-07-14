@@ -93,11 +93,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Instalar kubeval
+      - name: Instalar kubeval (APT)
         run: |
-          curl -sL https://github.com/instrumenta/kubeval/releases/download/latest/kubeval-linux-amd64.tar.gz \
-            | tar -xz
-          sudo mv kubeval /usr/local/bin/
+          sudo apt-get update
+          sudo apt-get install -y kubeval
 
       - name: Ejecutar validación
         run: |
