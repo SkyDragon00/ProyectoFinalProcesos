@@ -198,7 +198,7 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v5.0.0
         with:
           args: >
-            -Dsonar.branch.name=develop
+            –Dsonar.branch.name=${{ github.ref_name }}
             -Dsonar.python.coverage.reportPaths=coverage.xml
             -Dsonar.junit.reportPaths=test-results/junit.xml
         env:
