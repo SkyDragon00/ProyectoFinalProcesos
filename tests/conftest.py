@@ -53,17 +53,29 @@ def session_fixture():
         yield session
 
 
-@pytest.fixture(name="clean_face_db", autouse=True)
+@pytest.fixture(name="clean_face_db")
 def clean_face_db_fixture():
     """Clean up face recognition database before each test."""
     people_imgs_path = Path("./data/people_imgs")
-    if people_imgs_path.exists():
-        shutil.rmtree(people_imgs_path)
+    if people_imgs_path.exists() and people_imgs_path.is_dir():
+        try:
+            shutil.rmtree(people_imgs_path)
+        except OSError:
+            # Handle permission errors on Windows
+            import time
+            time.sleep(0.1)
+            try:
+                shutil.rmtree(people_imgs_path)
+            except OSError:
+                pass  # Ignore if we can't clean up
     people_imgs_path.mkdir(parents=True, exist_ok=True)
     yield
     # Cleanup after test as well
-    if people_imgs_path.exists():
-        shutil.rmtree(people_imgs_path)
+    if people_imgs_path.exists() and people_imgs_path.is_dir():
+        try:
+            shutil.rmtree(people_imgs_path)
+        except OSError:
+            pass  # Ignore cleanup errors
 
 
 @pytest.fixture(name="client")
