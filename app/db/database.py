@@ -40,6 +40,13 @@ else:
         settings.DATABASE_URL,
         echo=True
     )
+
+
+def get_engine() -> Engine:
+    """Get the database engine."""
+    return engine
+
+
 # endregion
 
 
