@@ -151,7 +151,7 @@ def test_get_assistant_by_id_number_not_found(client: TestClient, token: str, fa
     assert json_response["detail"] == "Assistant not found"
 
 
-def test_add_assistant_success(client: TestClient, token: str, faker: Faker):
+def test_add_assistant_success(client: TestClient, token: str, faker: Faker, clean_face_db):
     """Test the POST /assistant/add endpoint with valid data.
 
     curl -X 'POST' \\
@@ -190,8 +190,6 @@ def test_add_assistant_success(client: TestClient, token: str, faker: Faker):
         )
 
     json_response = response.json()
-    print(f"Response status: {response.status_code}")
-    print(f"Response body: {json_response}")
     assert response.status_code == status.HTTP_201_CREATED
     assert json_response["email"] == person["email"]
     assert json_response["first_name"] == person["first_name"]
@@ -199,7 +197,7 @@ def test_add_assistant_success(client: TestClient, token: str, faker: Faker):
     assert "id" in json_response
 
 
-def test_add_assistant_duplicate_person(client: TestClient, token: str, faker: Faker):
+def test_add_assistant_duplicate_person(client: TestClient, token: str, faker: Faker, clean_face_db):
     """Test the POST /assistant/add endpoint with the same person (same face).
     
     This test verifies that the face recognition system prevents the same person
@@ -239,8 +237,11 @@ def test_add_assistant_duplicate_person(client: TestClient, token: str, faker: F
                 "accept": "application/json"},
             data=person,
             files=files
-        )
-
+        )    # Debug the first registration attempt
+    if response.status_code != status.HTTP_201_CREATED:
+        print(f"First registration failed with status: {response.status_code}")
+        print(f"Response: {response.json()}")
+    
     assert response.status_code == status.HTTP_201_CREATED
 
     # Second registration with same face (but different email and ID) should fail
@@ -341,7 +342,7 @@ def test_add_assistant_missing_image(client: TestClient, token: str, faker: Fake
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
-def test_get_assistant_info_success(client: TestClient, token: str, faker: Faker):
+def test_get_assistant_info_success(client: TestClient, token: str, faker: Faker, clean_face_db):
     """Test the GET /assistant/info endpoint with valid authentication.
 
     curl -X 'GET' \\
@@ -417,7 +418,7 @@ def test_get_assistant_info_unauthorized(client: TestClient):
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
-def test_get_assistant_by_id_number_success(client: TestClient, token: str, faker: Faker):
+def test_get_assistant_by_id_number_success(client: TestClient, token: str, faker: Faker, clean_face_db):
     """Test the GET /assistant/get-by-id-number/{id_number} endpoint with existing ID.
 
     curl -X 'GET' \\
@@ -547,7 +548,7 @@ def test_add_assistant_weak_password(client: TestClient, token: str, faker: Fake
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
 
-def test_assistant_register_to_event_success(client: TestClient, token: str, faker: Faker):
+def test_assistant_register_to_event_success(client: TestClient, token: str, faker: Faker, clean_face_db):
     """Test assistant registration to an event.
 
     curl -X 'POST' \\
@@ -631,7 +632,7 @@ def test_assistant_register_to_event_success(client: TestClient, token: str, fak
     assert json_response["event_id"] == event_id
 
 
-def test_assistant_register_to_nonexistent_event(client: TestClient, token: str, faker: Faker):
+def test_assistant_register_to_nonexistent_event(client: TestClient, token: str, faker: Faker, clean_face_db):
     """Test assistant registration to a non-existent event.
 
     curl -X 'POST' \\
@@ -693,7 +694,7 @@ def test_assistant_register_to_nonexistent_event(client: TestClient, token: str,
     assert json_response["detail"] == "Event not found"
 
 
-def test_assistant_get_registered_events(client: TestClient, token: str, faker: Faker):
+def test_assistant_get_registered_events(client: TestClient, token: str, faker: Faker, clean_face_db):
     """Test getting registered events for an assistant.
 
     curl -X 'GET' \\
