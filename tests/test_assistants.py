@@ -3,6 +3,7 @@ from pathlib import Path
 from uuid import uuid4
 from typing import Any, Dict
 
+import sqlalchemy.exc
 from faker import Faker
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -1626,9 +1627,7 @@ def test_add_assistant_database_connection_error(client: TestClient, token: str,
         "first_name": faker.first_name(),
         "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
         "email": generate_assistant_email(faker),
-    }
-
-    # Mock the PersonImg.save method to raise DatabaseError
+    }    # Mock the PersonImg.save method to raise DatabaseError
     with patch('app.routers.assistant.PersonImg') as mock_person_img:
         mock_instance = MagicMock()
         mock_person_img.return_value = mock_instance
@@ -1637,7 +1636,7 @@ def test_add_assistant_database_connection_error(client: TestClient, token: str,
             params={},
             orig=Exception("Connection lost")
         )
-
+        
         with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
             files = {"image": ("person.jpeg", image_file, "image/jpeg")}
             response = client.post(
@@ -1653,4 +1652,414 @@ def test_add_assistant_database_connection_error(client: TestClient, token: str,
     json_response = response.json()
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
     assert json_response["detail"] == "An error occurred while saving the image"
+
+
+def test_update_assistant_profile_success(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test the PATCH /assistant/{assistant_id} endpoint with successful update.
+    
+    This test verifies that an assistant can successfully update their own profile
+    with valid data, including personal information updates.
+    
+    curl -X 'PATCH' \\
+        'http://127.0.0.1:8000/assistant/1' \\
+        -H 'Authorization: Bearer <token>' \\
+        -d '{"first_name": "Updated Name"}'
+    """
+    # Create an assistant first
+    id_number = faker.ecuadorian_id_number()
+    password = faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True)
+    person: Dict[str, Any] = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": password,
+        "email": generate_assistant_email(faker),
+    }
+
+    # Create assistant
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        create_response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+    
+    assert create_response.status_code == status.HTTP_201_CREATED
+    assistant_id = create_response.json()["id"]
+
+    # Get assistant token
+    assistant_token = client.post(
+        "/token",
+        data={
+            "grant_type": "password",
+            "username": person["email"],
+            "password": password,
+            "scope": "assistant",
+            "client_id": "",
+            "client_secret": ""
+        }
+    ).json()["access_token"]
+
+    # Update assistant profile
+    update_data = {
+        "user_update": {
+            "first_name": "Updated FirstName",
+            "last_name": "Updated LastName"
+        },
+        "assistant_update": {
+            "phone": "0987654321"
+        }
+    }
+
+    response = client.patch(
+        f"/assistant/{assistant_id}",
+        headers={
+            "Authorization": f"Bearer {assistant_token}",
+            "accept": "application/json",
+            "content-type": "application/json"
+        },
+        json=update_data
+    )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_200_OK
+    assert json_response["first_name"] == "Updated FirstName"
+    assert json_response["last_name"] == "Updated LastName"
+    assert json_response["assistant"]["phone"] == "0987654321"
+
+
+def test_update_assistant_profile_unauthorized_cross_user(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test the PATCH /assistant/{assistant_id} endpoint when assistant tries to update another assistant.
+    
+    This test verifies that an assistant cannot update another assistant's profile,
+    which should result in a 403 Forbidden error.
+    
+    curl -X 'PATCH' \\
+        'http://127.0.0.1:8000/assistant/2' \\
+        -H 'Authorization: Bearer <assistant1_token>' \\
+        -d '{"first_name": "Hacked Name"}'
+    """
+    from unittest.mock import patch, MagicMock
+    
+    # Mock the face recognition to allow different people
+    with patch('app.helpers.personTempImg.PersonImg.is_single_person') as mock_is_single_person, \
+         patch('app.helpers.personTempImg.PersonImg.path_imgs_similar_people') as mock_similar_people:
+        
+        mock_is_single_person.return_value = True
+        mock_similar_people.return_value = []  # No similar people found
+        
+        # Create first assistant
+        id_number1 = faker.ecuadorian_id_number()
+        password1 = faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True)
+        person1: Dict[str, Any] = {
+            "gender": faker.random_element(elements=["female", "male", "other"]),
+            "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+            "id_number_type": "cedula",
+            "id_number": id_number1,
+            "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+            "accepted_terms": "true",
+            "last_name": faker.last_name(),
+            "first_name": faker.first_name(),
+            "password": password1,
+            "email": generate_assistant_email(faker),
+        }
+
+        with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+            files = {"image": ("person1.jpeg", image_file, "image/jpeg")}
+            create_response1 = client.post(
+                "/assistant/add",
+                headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+                data=person1,
+                files=files
+            )
+        
+        assert create_response1.status_code == status.HTTP_201_CREATED
+
+        # Create second assistant
+        id_number2 = faker.ecuadorian_id_number()
+        password2 = faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True)
+        person2: Dict[str, Any] = {
+            "gender": faker.random_element(elements=["female", "male", "other"]),
+            "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+            "id_number_type": "cedula",
+            "id_number": id_number2,
+            "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+            "accepted_terms": "true",
+            "last_name": faker.last_name(),
+            "first_name": faker.first_name(),
+            "password": password2,
+            "email": generate_assistant_email(faker),
+        }
+
+        with open("tests/imgs/person2.jpg", "rb") as image_file:
+            files = {"image": ("person2.jpeg", image_file, "image/jpeg")}
+            create_response2 = client.post(
+                "/assistant/add",
+                headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+                data=person2,
+                files=files
+            )
+        
+        assert create_response2.status_code == status.HTTP_201_CREATED
+        assistant2_id = create_response2.json()["id"]
+
+        # Get first assistant's token
+        assistant1_token = client.post(
+            "/token",
+            data={
+                "grant_type": "password",
+                "username": person1["email"],
+                "password": password1,
+                "scope": "assistant",
+                "client_id": "",
+                "client_secret": ""
+            }
+        ).json()["access_token"]
+
+        # Try to update second assistant's profile with first assistant's token
+        update_data = {
+            "user_update": {
+                "first_name": "Hacked Name"
+            },
+            "assistant_update": {}
+        }
+
+        response = client.patch(
+            f"/assistant/{assistant2_id}",
+            headers={
+                "Authorization": f"Bearer {assistant1_token}",
+                "accept": "application/json",
+                "content-type": "application/json"
+            },
+            json=update_data
+        )
+
+        json_response = response.json()
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert json_response["detail"] == "You can only update your own profile"
+
+
+def test_delete_assistant_success(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test the DELETE /assistant/{assistant_id} endpoint with successful deletion.
+    
+    This test verifies that an assistant can successfully delete their own profile,
+    which should result in a 204 No Content response.
+    
+    curl -X 'DELETE' \\
+        'http://127.0.0.1:8000/assistant/1' \\
+        -H 'Authorization: Bearer <token>'
+    """
+    # Create an assistant first
+    id_number = faker.ecuadorian_id_number()
+    password = faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True)
+    person: Dict[str, Any] = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": password,
+        "email": generate_assistant_email(faker),
+    }
+
+    # Create assistant
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        create_response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+    
+    assert create_response.status_code == status.HTTP_201_CREATED
+    assistant_id = create_response.json()["id"]
+
+    # Get assistant token
+    assistant_token = client.post(
+        "/token",
+        data={
+            "grant_type": "password",
+            "username": person["email"],
+            "password": password,
+            "scope": "assistant",
+            "client_id": "",
+            "client_secret": ""
+        }
+    ).json()["access_token"]
+
+    # Delete assistant profile
+    response = client.delete(
+        f"/assistant/{assistant_id}",
+        headers={
+            "Authorization": f"Bearer {assistant_token}",
+            "accept": "application/json"
+        }
+    )
+
+    assert response.status_code == status.HTTP_204_NO_CONTENT
+
+    # Verify the assistant is deleted by trying to get their info
+    verify_response = client.get(
+        "/assistant/info",
+        headers={
+            "Authorization": f"Bearer {assistant_token}",
+            "accept": "application/json"
+        }
+    )
+    
+    # Should fail because the token is now invalid (user deleted)
+    assert verify_response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_register_companion_to_event_success(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test the POST /assistant/register-companion-to-event/{event_id} endpoint successfully.
+    
+    This test verifies the complete flow of registering a companion to an event,
+    including creating two assistants, an event, registering the main assistant,
+    and then registering the companion.
+
+    curl -X 'POST' \\
+        'http://127.0.0.1:8000/assistant/register-companion-to-event/1' \\
+        -H 'Authorization: Bearer <token>' \\
+        -F 'companion_id=2' \\
+        -F 'companion_type=first_grade'
+    """
+    from unittest.mock import patch
+    
+    # Mock the face recognition to allow different people
+    with patch('app.helpers.personTempImg.PersonImg.is_single_person') as mock_is_single_person, \
+         patch('app.helpers.personTempImg.PersonImg.path_imgs_similar_people') as mock_similar_people:
+        
+        mock_is_single_person.return_value = True
+        mock_similar_people.return_value = []  # No similar people found
+        
+        # Create main assistant
+        id_number1 = faker.ecuadorian_id_number()
+        password1 = faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True)
+        person1: Dict[str, Any] = {
+            "gender": faker.random_element(elements=["female", "male", "other"]),
+            "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+            "id_number_type": "cedula",
+            "id_number": id_number1,
+            "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+            "accepted_terms": "true",
+            "last_name": faker.last_name(),
+            "first_name": faker.first_name(),
+            "password": password1,
+            "email": generate_assistant_email(faker),
+        }
+
+        with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+            files = {"image": ("person1.jpeg", image_file, "image/jpeg")}
+            create_response1 = client.post(
+                "/assistant/add",
+                headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+                data=person1,
+                files=files
+            )
+
+        assert create_response1.status_code == status.HTTP_201_CREATED
+
+        # Create companion assistant
+        id_number2 = faker.ecuadorian_id_number()
+        person2: Dict[str, Any] = {
+            "gender": faker.random_element(elements=["female", "male", "other"]),
+            "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+            "id_number_type": "cedula",
+            "id_number": id_number2,
+            "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+            "accepted_terms": "true",
+            "last_name": faker.last_name(),
+            "first_name": faker.first_name(),
+            "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+            "email": generate_assistant_email(faker),
+        }
+    
+        with open("tests/imgs/person3.jpg", "rb") as image_file:
+            files = {"image": ("person2.jpeg", image_file, "image/jpeg")}
+            create_response2 = client.post(
+                "/assistant/add",
+                headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+                data=person2,
+                files=files
+            )
+        
+        assert create_response2.status_code == status.HTTP_201_CREATED
+        companion_id = create_response2.json()["id"]
+
+        # Create an event
+        event_data: Dict[str, Any] = {
+            "name": faker.sentence(nb_words=3),
+            "description": faker.text(max_nb_chars=200),
+            "location": faker.address(),
+            "maps_link": "https://maps.app.goo.gl/testlocation",
+            "capacity": 100,
+            "capacity_type": "limit_of_spaces",
+        }
+
+        with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+            event_files = {"image": ("event.jpeg", image_file, "image/jpeg")}
+            event_response = client.post(
+                "/events/add",
+                headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+                data=event_data,
+                files=event_files
+            )
+        
+        assert event_response.status_code == status.HTTP_201_CREATED
+        event_id = event_response.json()["id"]
+
+        # Get main assistant token
+        assistant1_token = client.post(
+            "/token",
+            data={
+                "grant_type": "password",
+                "username": person1["email"],
+                "password": password1,
+                "scope": "assistant",
+                "client_id": "",
+                "client_secret": ""
+            }
+        ).json()["access_token"]
+
+        # Register main assistant to the event first
+        register_response = client.post(
+            f"/assistant/register-to-event/{event_id}",
+            headers={
+                "Authorization": f"Bearer {assistant1_token}",
+                "accept": "application/json"
+            }
+        )
+        
+        assert register_response.status_code == status.HTTP_200_OK
+
+        # Now register companion to the event
+        companion_response = client.post(
+            f"/assistant/register-companion-to-event/{event_id}",
+            headers={
+                "Authorization": f"Bearer {assistant1_token}",
+                "accept": "application/json"
+            },
+            data={
+                "companion_id": str(companion_id),
+                "companion_type": "first_grade"
+            }
+        )
+
+        json_response = companion_response.json()
+        assert companion_response.status_code == status.HTTP_200_OK
+        assert json_response["event_id"] == event_id
+        assert json_response["companion_id"] == companion_id
+        assert json_response["companion_type"] == "first_grade"
 
