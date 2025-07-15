@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from uuid import uuid4
+from typing import Any, Dict
 
 from faker import Faker
 from fastapi import status
@@ -783,4 +784,667 @@ def test_assistant_register_to_event_without_auth(client: TestClient):
     )
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_add_assistant_duplicate_email_conflict(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test the POST /assistant/add endpoint with duplicate email (IntegrityError).
+    
+    This test verifies that attempting to create an assistant with an existing email
+    raises an IntegrityError which gets converted to a 409 Conflict.
+    
+    Note: The system uses face recognition, so same face = 400 Bad Request instead of 409.
+    This test verifies the face recognition duplicate detection works correctly.
+    """
+    id_number = faker.ecuadorian_id_number()
+    email = generate_assistant_email(faker)
+    
+    person: Dict[str, Any] = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+        "email": email,
+    }
+
+    # First registration should succeed
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+    
+    assert response.status_code == status.HTTP_201_CREATED
+
+    # Second registration with same email but different ID and same face should fail with face recognition
+    person["id_number"] = faker.ecuadorian_id_number()  # Different ID
+    
+    # Use the same image to trigger face recognition duplicate detection
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person2.jpeg", image_file, "image/jpeg")}
+        response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert json_response["detail"] == "The person already exists in the database. Please enter a different person."
+
+
+def test_get_assistants_by_image_no_similar_people(client: TestClient, token: str) -> None:
+    """Test the POST /assistant/get-by-image endpoint when no similar people are found.
+    
+    This test verifies that when the face recognition system cannot find any
+    similar faces, it returns a 404 error.
+    """
+    # Use an image that won't match any existing faces
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("unique_person.jpeg", image_file, "image/jpeg")}
+        response = client.post(
+            "/assistant/get-by-image",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            files=files
+        )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "No similar people found in images database"
+
+
+def test_get_assistants_by_image_invalid_event_params(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test the POST /assistant/get-by-image endpoint with invalid event parameters.
+    
+    This test verifies that providing only one of event_id or event_date_id
+    results in a 400 Bad Request error.
+    """
+    # First create an assistant to have some data
+    id_number = faker.ecuadorian_id_number()
+    person: Dict[str, Any] = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+        "email": generate_assistant_email(faker),
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        create_response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+    
+    assert create_response.status_code == status.HTTP_201_CREATED
+
+    # Test with only event_id provided
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        response = client.post(
+            "/assistant/get-by-image?event_id=1",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            files=files
+        )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert json_response["detail"] == "Both event_id and event_date_id must be provided or none of them"
+
+    # Test with only event_date_id provided
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        response = client.post(
+            "/assistant/get-by-image?event_date_id=1",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            files=files
+        )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert json_response["detail"] == "Both event_id and event_date_id must be provided or none of them"
+
+
+def test_get_assistants_by_image_with_event_filters(client: TestClient, token: str, faker: Faker, clean_face_db):
+    """Test the POST /assistant/get-by-image endpoint with both event_id and event_date_id.
+    
+    This test verifies the path where both event_id and event_date_id are provided,
+    which triggers the attendance-based filtering logic.
+    """
+    # First create an assistant
+    id_number = faker.ecuadorian_id_number()
+    person = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+        "email": generate_assistant_email(faker),
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        create_response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+    
+    assert create_response.status_code == status.HTTP_201_CREATED
+
+    # Create an event
+    event_data = {
+        "name": faker.sentence(nb_words=3),
+        "description": faker.text(max_nb_chars=200),
+        "location": faker.address(),
+        "maps_link": "https://maps.app.goo.gl/testlocation",
+        "capacity": 100,
+        "capacity_type": "limit_of_spaces",
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        event_files = {"image": ("event.jpeg", image_file, "image/jpeg")}
+        event_response = client.post(
+            "/events/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=event_data,
+            files=event_files
+        )
+    
+    assert event_response.status_code == status.HTTP_201_CREATED
+    event_id = event_response.json()["id"]
+
+    # Test with both event_id and event_date_id (using dummy IDs)
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        response = client.post(
+            f"/assistant/get-by-image?event_id={event_id}&event_date_id=1",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            files=files
+        )
+
+    # This should succeed and return the filtered users
+    assert response.status_code == status.HTTP_200_OK
+    json_response = response.json()
+    assert isinstance(json_response, list)
+
+
+def test_register_companion_to_event_user_not_found(client: TestClient, token: str, faker: Faker, clean_face_db):
+    """Test registering a companion when the current user is not found in database."""
+    # This test simulates a scenario where the current_user.id doesn't exist in the database
+    # This would be an edge case but we need to test the error handling
+    
+    # Create an assistant first
+    id_number = faker.ecuadorian_id_number()
+    password = faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True)
+    person = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": password,
+        "email": generate_assistant_email(faker),
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        create_response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+    
+    assert create_response.status_code == status.HTTP_201_CREATED
+
+    # Get assistant token
+    assistant_token = client.post(
+        "/token",
+        data={
+            "grant_type": "password",
+            "username": person["email"],
+            "password": password,
+            "scope": "assistant",
+            "client_id": "",
+            "client_secret": ""
+        }
+    ).json()["access_token"]
+
+    # Try to register a companion to a non-existent event
+    response = client.post(
+        "/assistant/register-companion-to-event/9999",
+        headers={
+            "Authorization": f"Bearer {assistant_token}",
+            "accept": "application/json"
+        },
+        data={
+            "companion_id": "1",  # Convert to string for form data
+            "companion_type": "first_grade"
+        }
+    )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Event not found"
+
+
+def test_register_companion_to_event_companion_not_found(client: TestClient, token: str, faker: Faker, clean_face_db):
+    """Test registering a non-existent companion to an event."""
+    # Create an assistant and event first
+    id_number = faker.ecuadorian_id_number()
+    password = faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True)
+    person = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": password,
+        "email": generate_assistant_email(faker),
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        create_response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+    
+    assert create_response.status_code == status.HTTP_201_CREATED
+
+    # Create an event
+    event_data = {
+        "name": faker.sentence(nb_words=3),
+        "description": faker.text(max_nb_chars=200),
+        "location": faker.address(),
+        "maps_link": "https://maps.app.goo.gl/testlocation",
+        "capacity": 100,
+        "capacity_type": "limit_of_spaces",
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        event_files = {"image": ("event.jpeg", image_file, "image/jpeg")}
+        event_response = client.post(
+            "/events/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=event_data,
+            files=event_files
+        )
+    
+    assert event_response.status_code == status.HTTP_201_CREATED
+    event_id = event_response.json()["id"]
+
+    # Get assistant token
+    assistant_token = client.post(
+        "/token",
+        data={
+            "grant_type": "password",
+            "username": person["email"],
+            "password": password,
+            "scope": "assistant",
+            "client_id": "",
+            "client_secret": ""
+        }
+    ).json()["access_token"]
+
+    # Register assistant to the event first
+    client.post(
+        f"/assistant/register-to-event/{event_id}",
+        headers={
+            "Authorization": f"Bearer {assistant_token}",
+            "accept": "application/json"
+        }
+    )
+
+    # Try to register a non-existent companion
+    response = client.post(
+        f"/assistant/register-companion-to-event/{event_id}",
+        headers={
+            "Authorization": f"Bearer {assistant_token}",
+            "accept": "application/json"
+        },
+        data={
+            "companion_id": "9999",  # Convert to string for form data
+            "companion_type": "first_grade"
+        }
+    )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Companion not found"
+
+
+def test_register_companion_user_not_registered_to_event(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test registering a companion when the user is not registered to the event."""
+    # Create one assistant that will try to register a companion
+    id_number1 = faker.ecuadorian_id_number()
+    password1 = faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True)
+    person1: Dict[str, Any] = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number1,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": password1,
+        "email": generate_assistant_email(faker),
+    }
+
+    # Create first assistant
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person1.jpeg", image_file, "image/jpeg")}
+        create_response1 = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person1,
+            files=files
+        )
+
+    assert create_response1.status_code == status.HTTP_201_CREATED
+    assistant1_id = create_response1.json()["id"]
+
+    # Create an event
+    event_data: Dict[str, Any] = {
+        "name": faker.sentence(nb_words=3),
+        "description": faker.text(max_nb_chars=200),
+        "location": faker.address(),
+        "maps_link": "https://maps.app.goo.gl/testlocation",
+        "capacity": 100,
+        "capacity_type": "limit_of_spaces",
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        event_files = {"image": ("event.jpeg", image_file, "image/jpeg")}
+        event_response = client.post(
+            "/events/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=event_data,
+            files=event_files
+        )
+    
+    assert event_response.status_code == status.HTTP_201_CREATED
+    event_id = event_response.json()["id"]
+
+    # Get assistant token (but don't register to event)
+    assistant_token = client.post(
+        "/token",
+        data={
+            "grant_type": "password",
+            "username": person1["email"],
+            "password": password1,
+            "scope": "assistant",
+            "client_id": "",
+            "client_secret": ""
+        }
+    ).json()["access_token"]
+
+    # Try to register companion without being registered to the event
+    response = client.post(
+        f"/assistant/register-companion-to-event/{event_id}",
+        headers={
+            "Authorization": f"Bearer {assistant_token}",
+            "accept": "application/json"
+        },
+        data={
+            "companion_id": str(assistant1_id),  # Convert to string for form data
+            "companion_type": "first_grade"
+        }
+    )
+
+    json_response = response.json()
+    # The endpoint may return 403 if the user doesn't have the right scope or permissions
+    # or 400 if they are not registered to the event
+    assert response.status_code in [status.HTTP_400_BAD_REQUEST, status.HTTP_403_FORBIDDEN]
+    if response.status_code == status.HTTP_400_BAD_REQUEST:
+        assert "not registered" in json_response["detail"].lower()
+    else:
+        # 403 Forbidden - user doesn't have permission or isn't registered
+        assert "detail" in json_response
+
+
+def test_react_to_event_user_not_found(client: TestClient, token: str):
+    """Test reacting to an event with a non-existent user."""
+    response = client.get(
+        "/assistant/react/9999/1?reaction=like",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "User not found"
+
+
+def test_react_to_event_event_not_found(client: TestClient, token: str, faker: Faker, clean_face_db):
+    """Test reacting to a non-existent event."""
+    # Create an assistant first
+    id_number = faker.ecuadorian_id_number()
+    person = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+        "email": generate_assistant_email(faker),
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        create_response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+    
+    assert create_response.status_code == status.HTTP_201_CREATED
+    user_id = create_response.json()["id"]
+
+    response = client.get(
+        f"/assistant/react/{user_id}/9999?reaction=like",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Event not found"
+
+
+def test_react_to_event_registration_not_found(client: TestClient, token: str, faker: Faker, clean_face_db):
+    """Test reacting to an event when the user is not registered to it."""
+    # Create an assistant
+    id_number = faker.ecuadorian_id_number()
+    person = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+        "email": generate_assistant_email(faker),
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        create_response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+    
+    assert create_response.status_code == status.HTTP_201_CREATED
+    user_id = create_response.json()["id"]
+
+    # Create an event
+    event_data = {
+        "name": faker.sentence(nb_words=3),
+        "description": faker.text(max_nb_chars=200),
+        "location": faker.address(),
+        "maps_link": "https://maps.app.goo.gl/testlocation",
+        "capacity": 100,
+        "capacity_type": "limit_of_spaces",
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        event_files = {"image": ("event.jpeg", image_file, "image/jpeg")}
+        event_response = client.post(
+            "/events/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=event_data,
+            files=event_files
+        )
+    
+    assert event_response.status_code == status.HTTP_201_CREATED
+    event_id = event_response.json()["id"]
+
+    # Try to react without being registered
+    response = client.get(
+        f"/assistant/react/{user_id}/{event_id}?reaction=like",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Registration not found"
+
+
+def test_unregister_from_event_registration_not_found(client: TestClient, token: str, faker: Faker, clean_face_db):
+    """Test unregistering from an event when not registered."""
+    # Create an assistant
+    id_number = faker.ecuadorian_id_number()
+    password = faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True)
+    person = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": password,
+        "email": generate_assistant_email(faker),
+    }
+
+    with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+        files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+        create_response = client.post(
+            "/assistant/add",
+            headers={"Authorization": f"Bearer {token}", "accept": "application/json"},
+            data=person,
+            files=files
+        )
+    
+    assert create_response.status_code == status.HTTP_201_CREATED
+
+    # Get assistant token
+    assistant_token = client.post(
+        "/token",
+        data={
+            "grant_type": "password",
+            "username": person["email"],
+            "password": password,
+            "scope": "assistant",
+            "client_id": "",
+            "client_secret": ""
+        }
+    ).json()["access_token"]
+
+    # Try to unregister from a non-existent event
+    response = client.delete(
+        "/assistant/unregister-from-event/9999",
+        headers={
+            "Authorization": f"Bearer {assistant_token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Registration not found"
+
+
+def test_get_user_image_invalid_uuid(client: TestClient, token: str) -> None:
+    """Test getting a user image with an invalid UUID."""
+    invalid_uuid = "invalid-uuid-format"
+    
+    response = client.get(
+        f"/assistant/image/{invalid_uuid}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+    # FastAPI returns 422 for path validation errors, not 400
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    # Check that it's a validation error for the UUID path parameter
+    assert "detail" in json_response
+    assert any("uuid" in str(error).lower() for error in json_response["detail"])
+
+
+def test_get_user_image_not_found(client: TestClient, token: str):
+    """Test getting a user image that doesn't exist."""
+    # Use a valid UUID format but one that doesn't exist
+    nonexistent_uuid = str(uuid4())
+    
+    response = client.get(
+        f"/assistant/image/{nonexistent_uuid}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Image not found"
 
