@@ -258,11 +258,6 @@ async def get_events(
     events = session.exec(
         select(Event)
     ).all()
-    if not events:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No events found",
-        )
     return events
 
 

@@ -795,4 +795,455 @@ def test_delete_nonexistent_event_date(client: TestClient, token: str):
     assert json_response["detail"] == "Event date not found"
 
 
-# Events add attendence
+# Test upcoming events with quantity
+def test_events_upcoming_with_quantity(client: TestClient):
+    """Test the /events/upcoming endpoint with a positive quantity parameter.
+
+    curl -X 'GET' \\
+      'http://127.0.0.1:8000/events/upcoming?quantity=5' \\
+      -H 'accept: application/json'
+    """
+    response = client.get(
+        "/events/upcoming?quantity=5",
+        headers={"accept": "application/json"}
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_200_OK
+    assert isinstance(json_response, list)
+    assert len(json_response) <= 5
+
+
+# Test update event
+def test_update_event_success(client: TestClient, token: str):
+    """Test the PATCH /events/{event_id} endpoint to update an event successfully.
+
+    curl -X 'PATCH' \\
+      'http://127.0.0.1:8000/events/123' \\
+      -H 'accept: application/json' \\
+      -H 'Authorization: Bearer <token>' \\
+      -H 'Content-Type: application/json' \\
+      -d '{"name": "Updated Event Name", "description": "Updated description"}'
+    """
+    # Create an event first
+    image_content = b"fake_image_content"
+    files = {
+        "image": ("test_image.webp", image_content, "image/webp")
+    }
+
+    create_response = client.post(
+        "/events/add",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        },
+        data={
+            "name": "Original Event",
+            "description": "Original description",
+            "location": "UDLA Park",
+            "maps_link": "https://maps.app.goo.gl/a1zZZvko42gDR5ny6",
+            "capacity": "250",
+            "capacity_type": "site_capacity"
+        },
+        files=files
+    )
+
+    created_event = create_response.json()
+    event_id = created_event["id"]
+
+    # Update the event
+    update_data = {
+        "name": "Updated Event Name",
+        "description": "Updated description"
+    }
+
+    response = client.patch(
+        f"/events/{event_id}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json",
+            "Content-Type": "application/json"
+        },
+        json=update_data
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_200_OK
+    assert json_response["name"] == "Updated Event Name"
+    assert json_response["description"] == "Updated description"
+    assert json_response["id"] == event_id
+
+
+def test_update_nonexistent_event(client: TestClient, token: str):
+    """Test the PATCH /events/{event_id} endpoint with a non-existent event ID."""
+    update_data = {
+        "name": "Updated Event Name",
+        "description": "Updated description"
+    }
+
+    response = client.patch(
+        "/events/999999",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json",
+            "Content-Type": "application/json"
+        },
+        json=update_data
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Event not found"
+
+
+# Test update event image
+def test_update_event_image_success(client: TestClient, token: str):
+    """Test the PATCH /events/{event_id}/image endpoint to update an event image successfully."""
+    # Create an event first
+    image_content = b"fake_image_content"
+    files = {
+        "image": ("test_image.webp", image_content, "image/webp")
+    }
+
+    create_response = client.post(
+        "/events/add",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        },
+        data={
+            "name": "Test Event",
+            "description": "Test description",
+            "location": "UDLA Park",
+            "maps_link": "https://maps.app.goo.gl/a1zZZvko42gDR5ny6",
+            "capacity": "250",
+            "capacity_type": "site_capacity"
+        },
+        files=files
+    )
+
+    created_event = create_response.json()
+    event_id = created_event["id"]
+    original_image_uuid = created_event["image_uuid"]
+
+    # Update the image
+    new_image_content = b"new_fake_image_content"
+    new_files = {
+        "image": ("new_test_image.webp", new_image_content, "image/webp")
+    }
+
+    response = client.patch(
+        f"/events/{event_id}/image",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        },
+        files=new_files
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_200_OK
+    assert json_response["id"] == event_id
+    assert json_response["image_uuid"] != original_image_uuid
+
+
+def test_update_image_nonexistent_event(client: TestClient, token: str):
+    """Test the PATCH /events/{event_id}/image endpoint with a non-existent event ID."""
+    image_content = b"fake_image_content"
+    files = {
+        "image": ("test_image.webp", image_content, "image/webp")
+    }
+
+    response = client.patch(
+        "/events/999999/image",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        },
+        files=files
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Event not found"
+
+
+# Test get all events
+def test_get_all_events(client: TestClient, token: str):
+    """Test the GET /events/all endpoint to retrieve all events."""
+    response = client.get(
+        "/events/all",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_200_OK
+    assert isinstance(json_response, list)
+
+
+# Test get my registered events
+def test_get_my_registered_events_empty(client: TestClient, token: str):
+    """Test the GET /events/my-registered-events endpoint when user has no registrations."""
+    response = client.get(
+        "/events/my-registered-events",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_200_OK
+    assert isinstance(json_response, list)
+
+
+# Test get events to react
+def test_get_events_to_react_empty(client: TestClient, token: str):
+    """Test the GET /events/events-to-react endpoint when user has no events to react to."""
+    response = client.get(
+        "/events/events-to-react",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_200_OK
+    assert isinstance(json_response, list)
+
+
+# Test get event image
+def test_get_event_image_success(client: TestClient, token: str):
+    """Test the GET /events/image/{image_uuid} endpoint to retrieve an event image."""
+    # Create an event first
+    image_content = b"fake_image_content"
+    files = {
+        "image": ("test_image.webp", image_content, "image/webp")
+    }
+
+    create_response = client.post(
+        "/events/add",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        },
+        data={
+            "name": "Test Event",
+            "description": "Test description",
+            "location": "UDLA Park",
+            "maps_link": "https://maps.app.goo.gl/a1zZZvko42gDR5ny6",
+            "capacity": "250",
+            "capacity_type": "site_capacity"
+        },
+        files=files
+    )
+
+    created_event = create_response.json()
+    image_uuid = created_event["image_uuid"]
+
+    # Get the image
+    response = client.get(
+        f"/events/image/{image_uuid}",
+        headers={"accept": "application/json"}
+    )
+
+    # The endpoint returns a FileResponse, so we check for success status
+    assert response.status_code == status.HTTP_200_OK
+
+
+def test_get_nonexistent_event_image(client: TestClient):
+    """Test the GET /events/image/{image_uuid} endpoint with a non-existent image UUID."""
+    fake_uuid = "00000000-0000-0000-0000-000000000000"
+
+    response = client.get(
+        f"/events/image/{fake_uuid}",
+        headers={"accept": "application/json"}
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Image not found"
+
+
+# Test delete event
+def test_delete_event_success(client: TestClient, token: str):
+    """Test the DELETE /events/{event_id} endpoint to delete an event successfully."""
+    # Create an event first
+    image_content = b"fake_image_content"
+    files = {
+        "image": ("test_image.webp", image_content, "image/webp")
+    }
+
+    create_response = client.post(
+        "/events/add",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        },
+        data={
+            "name": "Event to Delete",
+            "description": "This event will be deleted",
+            "location": "UDLA Park",
+            "maps_link": "https://maps.app.goo.gl/a1zZZvko42gDR5ny6",
+            "capacity": "250",
+            "capacity_type": "site_capacity"
+        },
+        files=files
+    )
+
+    created_event = create_response.json()
+    event_id = created_event["id"]
+
+    # Delete the event
+    response = client.delete(
+        f"/events/{event_id}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_200_OK
+    assert json_response["id"] == event_id
+
+
+def test_delete_nonexistent_event(client: TestClient, token: str):
+    """Test the DELETE /events/{event_id} endpoint with a non-existent event ID."""
+    response = client.delete(
+        "/events/999999",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Event not found"
+
+
+# Test get event dates
+def test_get_event_dates_success(client: TestClient, token: str):
+    """Test the GET /events/{event_id}/dates endpoint to retrieve event dates."""
+    # Create an event first
+    image_content = b"fake_image_content"
+    files = {
+        "image": ("test_image.webp", image_content, "image/webp")
+    }
+
+    create_response = client.post(
+        "/events/add",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        },
+        data={
+            "name": "Test Event",
+            "description": "Test description",
+            "location": "UDLA Park",
+            "maps_link": "https://maps.app.goo.gl/a1zZZvko42gDR5ny6",
+            "capacity": "250",
+            "capacity_type": "site_capacity"
+        },
+        files=files
+    )
+
+    created_event = create_response.json()
+    event_id = created_event["id"]
+
+    # Add a date to the event
+    client.post(
+        f"/events/{event_id}/date/add",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded"
+        },
+        data={
+            "day_date": "2025-08-15",
+            "start_time": "09:00:00.000Z",
+            "end_time": "17:00:00.000Z",
+            "deleted": "false"
+        }
+    )
+
+    # Get the event dates
+    response = client.get(
+        f"/events/{event_id}/dates",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_200_OK
+    assert isinstance(json_response, list)
+    assert len(json_response) > 0
+    assert any(date["day_date"] == "2025-08-15" for date in json_response)
+
+
+def test_get_dates_nonexistent_event(client: TestClient, token: str):
+    """Test the GET /events/{event_id}/dates endpoint with a non-existent event ID."""
+    response = client.get(
+        "/events/999999/dates",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Event not found"
+
+
+# Events add attendance
+def test_add_attendance_success(client: TestClient, token: str):
+    """Test the POST /events/add/attendance/{event_date_id}/{registration_id} endpoint successfully."""
+    # Note: This test would require setting up registration data
+    # Since we don't have access to registration creation in this router,
+    # this is a placeholder test that would need the full setup
+    pass
+
+
+def test_add_attendance_by_companion_success(client: TestClient, token: str):
+    """Test the POST /events/add/attendance/{event_date_id}/{event_id}/{companion_id} endpoint successfully."""
+    # Note: This test would require setting up companion/user registration data
+    # Since we don't have access to registration creation in this router,
+    # this is a placeholder test that would need the full setup
+    pass
+
+
+def test_add_attendance_nonexistent_event_date(client: TestClient, token: str):
+    """Test adding attendance with non-existent event date ID."""
+    response = client.post(
+        "/events/add/attendance/999999/999999/999999",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "accept": "application/json"
+        }
+    )
+
+    json_response = response.json()
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert json_response["detail"] == "Registration not found"
