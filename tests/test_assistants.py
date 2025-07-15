@@ -1448,3 +1448,209 @@ def test_get_user_image_not_found(client: TestClient, token: str):
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert json_response["detail"] == "Image not found"
 
+
+def test_add_assistant_database_integrity_error(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test the POST /assistant/add endpoint when SQLAlchemy IntegrityError occurs.
+    
+    This test simulates a database integrity constraint violation that can occur
+    during the commit operation, which should result in a 409 Conflict error.
+    
+    curl -X 'POST' \\
+        'http://127.0.0.1:8000/assistant/add' \\
+        -F 'email=test@gmail.com' ...
+    """
+    from unittest.mock import patch, MagicMock
+    import sqlalchemy.exc
+    
+    id_number = faker.ecuadorian_id_number()
+    person: Dict[str, Any] = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+        "email": generate_assistant_email(faker),
+    }
+
+    # Mock the PersonImg.save method to raise IntegrityError
+    with patch('app.routers.assistant.PersonImg') as mock_person_img:
+        mock_instance = MagicMock()
+        mock_person_img.return_value = mock_instance
+        mock_instance.save.side_effect = sqlalchemy.exc.IntegrityError(
+            statement="INSERT INTO user ...",
+            params={},
+            orig=Exception("Duplicate key error")
+        )
+
+        with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+            files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+            response = client.post(
+                "/assistant/add",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "accept": "application/json"
+                },
+                data=person,
+                files=files
+            )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert json_response["detail"] == "User already exists"
+
+
+def test_add_assistant_image_saving_error(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test the POST /assistant/add endpoint when a general Exception occurs during image saving.
+    
+    This test simulates a general error that can occur during the image saving process,
+    which should result in a 500 Internal Server Error.
+    
+    curl -X 'POST' \\
+        'http://127.0.0.1:8000/assistant/add' \\
+        -F 'email=test@gmail.com' ...
+    """
+    from unittest.mock import patch, MagicMock
+    
+    id_number = faker.ecuadorian_id_number()
+    person: Dict[str, Any] = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+        "email": generate_assistant_email(faker),
+    }
+
+    # Mock the PersonImg.save method to raise a general Exception
+    with patch('app.routers.assistant.PersonImg') as mock_person_img:
+        mock_instance = MagicMock()
+        mock_person_img.return_value = mock_instance
+        mock_instance.save.side_effect = Exception("Disk space full or I/O error")
+
+        with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+            files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+            response = client.post(
+                "/assistant/add",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "accept": "application/json"
+                },
+                data=person,
+                files=files
+            )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert json_response["detail"] == "An error occurred while saving the image"
+
+
+def test_add_assistant_filesystem_permission_error(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test the POST /assistant/add endpoint when filesystem permission error occurs.
+    
+    This test simulates a filesystem permission error that can occur during image saving,
+    which should result in a 500 Internal Server Error.
+    
+    curl -X 'POST' \\
+        'http://127.0.0.1:8000/assistant/add' \\
+        -F 'email=test@gmail.com' ...
+    """
+    from unittest.mock import patch, MagicMock
+    
+    id_number = faker.ecuadorian_id_number()
+    person: Dict[str, Any] = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+        "email": generate_assistant_email(faker),
+    }
+
+    # Mock the PersonImg.save method to raise PermissionError
+    with patch('app.routers.assistant.PersonImg') as mock_person_img:
+        mock_instance = MagicMock()
+        mock_person_img.return_value = mock_instance
+        mock_instance.save.side_effect = PermissionError("Permission denied: cannot write to directory")
+
+        with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+            files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+            response = client.post(
+                "/assistant/add",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "accept": "application/json"
+                },
+                data=person,
+                files=files
+            )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert json_response["detail"] == "An error occurred while saving the image"
+
+
+def test_add_assistant_database_connection_error(client: TestClient, token: str, faker: Faker, clean_face_db) -> None:  # type: ignore
+    """Test the POST /assistant/add endpoint when database connection error occurs.
+    
+    This test simulates a database connection error that can occur during the save operation,
+    which should result in a 500 Internal Server Error.
+    
+    curl -X 'POST' \\
+        'http://127.0.0.1:8000/assistant/add' \\
+        -F 'email=test@gmail.com' ...
+    """
+    from unittest.mock import patch, MagicMock
+    import sqlalchemy.exc
+    
+    id_number = faker.ecuadorian_id_number()
+    person: Dict[str, Any] = {
+        "gender": faker.random_element(elements=["female", "male", "other"]),
+        "date_of_birth": faker.date_of_birth(minimum_age=18, maximum_age=60).strftime("%Y-%m-%d"),
+        "id_number_type": "cedula",
+        "id_number": id_number,
+        "phone": str(faker.random_int(min=1000000000, max=9999999999)),
+        "accepted_terms": "true",
+        "last_name": faker.last_name(),
+        "first_name": faker.first_name(),
+        "password": faker.password(length=12, special_chars=True, digits=True, upper_case=True, lower_case=True),
+        "email": generate_assistant_email(faker),
+    }
+
+    # Mock the PersonImg.save method to raise DatabaseError
+    with patch('app.routers.assistant.PersonImg') as mock_person_img:
+        mock_instance = MagicMock()
+        mock_person_img.return_value = mock_instance
+        mock_instance.save.side_effect = sqlalchemy.exc.DatabaseError(
+            statement="SELECT ...",
+            params={},
+            orig=Exception("Connection lost")
+        )
+
+        with open("tests/imgs/foto_carne.jpg", "rb") as image_file:
+            files = {"image": ("person.jpeg", image_file, "image/jpeg")}
+            response = client.post(
+                "/assistant/add",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "accept": "application/json"
+                },
+                data=person,
+                files=files
+            )
+
+    json_response = response.json()
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert json_response["detail"] == "An error occurred while saving the image"
+
