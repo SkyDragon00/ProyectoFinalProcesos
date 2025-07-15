@@ -73,6 +73,11 @@ class PersonImg:
         :return: List of paths to similar people images
         :rtype: list[Path]
         """
+        # Check if the people_imgs directory exists and has images
+        people_imgs_dir = Path("./data/people_imgs")
+        if not people_imgs_dir.exists() or not any(people_imgs_dir.iterdir()):
+            return []
+
         # Create a temporary file to store the uploaded image
         # This is necessary because the file pointer is at the end after reading
         self.img.file.seek(0)
@@ -90,6 +95,9 @@ class PersonImg:
                 detector_backend="yunet",
                 enforce_detection=False,
             )[0]["identity"].to_list()
+        except ValueError:
+            # No items found in the database
+            return []
         finally:
             # Clean up the temporary file
             Path(temp_file_path).unlink()

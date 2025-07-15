@@ -64,6 +64,23 @@ def send_event_registration_email(
     dates: list[EventDate]
 ) -> None:
     subject = f"Hola {user.first_name} {user.last_name}, estás oficialmente registrado/a!"
+    
+    # Handle case where there are no dates yet
+    if not dates:
+        _send_email(
+            user,
+            subject,
+            "event_registration.html",
+            {
+                "event_name": event.name,
+                "day_date": "Fechas por confirmar",
+                "start_time": "Por confirmar",
+                "end_time": "Por confirmar",
+                "event_location": event.location,
+            }
+        )
+        return
+    
     event_date = sorted(dates, key=lambda d: d.day_date)[0]
     _send_email(
         user,

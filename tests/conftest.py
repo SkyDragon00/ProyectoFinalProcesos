@@ -1,4 +1,6 @@
 import pytest
+import shutil
+from pathlib import Path
 from faker import Faker
 from faker.providers import BaseProvider
 from fastapi.testclient import TestClient
@@ -49,6 +51,19 @@ def session_fixture():
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
         yield session
+
+
+@pytest.fixture(name="clean_face_db", autouse=True)
+def clean_face_db_fixture():
+    """Clean up face recognition database before each test."""
+    people_imgs_path = Path("./data/people_imgs")
+    if people_imgs_path.exists():
+        shutil.rmtree(people_imgs_path)
+    people_imgs_path.mkdir(parents=True, exist_ok=True)
+    yield
+    # Cleanup after test as well
+    if people_imgs_path.exists():
+        shutil.rmtree(people_imgs_path)
 
 
 @pytest.fixture(name="client")
